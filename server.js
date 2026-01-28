@@ -1,93 +1,136 @@
 const express = require('express');
 const mysql = require('mysql2/promise');
+const cors = require('cors');
 require('dotenv').config();
-const port = 3000;
+
+const app = express();
+const port = process.env.PORT || 3000;
+
+app.use(cors());
+app.use(express.json());
 
 const dbConfig = {
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
-    port:  process.env.DB_PORT,
+    port: process.env.DB_PORT || 3306,
     waitForConnections: true,
     connectionLimit: 100,
-    queueLimit: 0,
+};
+
+function requireAdmin(req, res, next) {
+    if (req.header('x-admin') === 'true') next();
+    else res.status(403).json({ error: 'Admin only route' });
 }
 
-const app = express();
-app.use(express.json());
+app.get('/', (req, res) => res.send('GreenXP API is running! Better go catch it.'));
+
+app.get('/missions', async (req, res) => {
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        const [rows] = await connection.execute('SELECT * FROM missions');
+        res.json(rows);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error fetching missions' });
+    }
+});
+
+app.post('/missions', requireAdmin, async (req, res) => {
+    const { title, category, xp } = req.body;
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        await connection.execute('INSERT INTO missions (title, category, xp) VALUES (?, ?, ?)', [title, category, xp]);
+        res.status(201).json({ message: `Mission "${title}" added successfully.` });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error adding mission' });
+    }
+});
+
+app.put('/missions/:id', requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    const { title, category, xp } = req.body;
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        await connection.execute('UPDATE missions SET title=?, category=?, xp=? WHERE id=?', [title, category, xp, id]);
+        res.json({ message: `Mission ${id} updated successfully.` });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error updating mission' });
+    }
+});
+
+app.delete('/missions/:id', requireAdmin, async (req, res) => {
+    const { id } = req.params;
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        await connection.execute('DELETE FROM missions WHERE id=?', [id]);
+        res.json({ message: `Mission ${id} deleted.` });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error deleting mission' });
+    }
+});
+
+
+
+app.get('/user_missions/:userId', async (req, res) => {
+    const { userId } = req.params;
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        const [rows] = await connection.execute(
+            `SELECT um.id, um.completed, m.title, m.category, m.xp
+       FROM user_missions um
+       JOIN missions m ON um.mission_id = m.id
+       WHERE um.user_id = ?`,
+            [userId]
+        );
+        res.json(rows);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error fetching user missions' });
+    }
+});
+
+app.post('/user_missions', async (req, res) => {
+    const { user_id, mission_id } = req.body;
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        await connection.execute('INSERT INTO user_missions (user_id, mission_id) VALUES (?, ?)', [user_id, mission_id]);
+        res.status(201).json({ message: 'Mission accepted!' });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error accepting mission' });
+    }
+});
+
+app.put('/user_missions/:id', async (req, res) => {
+    const { id } = req.params;
+    const { completed } = req.body;
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        await connection.execute('UPDATE user_missions SET completed=? WHERE id=?', [completed, id]);
+        res.json({ message: `Mission ${id} updated.` });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error updating mission status' });
+    }
+});
+
+app.delete('/user_missions/:id', async (req, res) => {
+    const { id } = req.params;
+    try {
+        const connection = await mysql.createConnection(dbConfig);
+        await connection.execute('DELETE FROM user_missions WHERE id=?', [id]);
+        res.json({ message: `Mission ${id} removed.` });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: 'Server error deleting user mission' });
+    }
+});
 
 app.listen(port, () => {
-    console.log(`Server running on port ${port}`)
+    console.log(`GreenXP server running on port ${port}`);
 });
-
-function requireAuth(req, res, next) {
-    const header = req.headers.authorization; // "Bearer <token>"
-    if (!header) return res.status(401).json({ error: "Missing Authorization header" });
-    const [type, token] = header.split(" ");
-    if (type !== "Bearer" || !token) {
-        return res.status(401).json({ error: "Invalid Authorization format" });
-    }
-    try {
-        const payload = jwt.verify(token, JWT_SECRET);
-        req.user = payload;
-        next();
-    } catch {
-        return res.status(401).json({ error: "Invalid/Expired token" });
-    }
-}
-// Protect only ONE route for this demo
-app.post("/addcard", requireAuth, async (req, res) => {
-// existing addcard logic (same as before)
-});
-
-app.get('/allcards', async (req, res) => {
-    try {
-        let connections = await mysql.createConnection(dbConfig);
-        const [rows] = await connections.execute('SELECT * FROM defaultdb.cards');
-        res.json(rows);
-    } catch {
-        console.error(err);
-        res.status(500).json({message:'Server error for allcards'});
-    }
-});
-
-app.post('/addcard', async (req, res) => {
-    const { card_name , card_pic } = req.body;
-    try {
-        let connection = await mysql.createConnection(dbConfig);
-        await connection.execute('INSERT INTO cards (card_name, card_pic) VALUES (?,?)', [card_name, card_pic]);
-        res.status(201).json({message:'Cards '+card_name+' added successfully.'});
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({message: 'Server error - could not add card' + card_name});
-    }
-})
-
-// Example Route: Update a card
-app.put('/updatecard/:id', async (req, res) => {
-    const { id } = req.params;
-    const { card_name, card_pic } = req.body;
-    try{
-        let connection = await mysql.createConnection(dbConfig);
-        await connection.execute('UPDATE cards SET card_name=?, card_pic=? WHERE id=?', [card_name, card_pic, id]);
-        res.status(201).json({ message: 'Card ' + id + ' updated successfully!' });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: 'Server error - could not update card ' + id });
-    }
-});
-
-// Example Route: Delete a card
-app.delete('/deletecard/:id', async (req, res) => {
-    const { id } = req.params;
-    try{
-        let connection = await mysql.createConnection(dbConfig);
-        await connection.execute('DELETE FROM cards WHERE id=?', [id]);
-        res.status(201).json({ message: 'Card ' + id + ' deleted successfully!' });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ message: 'Server error - could not delete card ' + id });
-    }
-});
-
